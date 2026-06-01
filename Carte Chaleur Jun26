@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard Vélo - Cartographie & Analyses</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f2f5; margin: 0; padding: 0; color: #333; }
+        .header { background: #fff; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; gap: 20px;}
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        .upload-btn-wrapper { position: relative; overflow: hidden; display: inline-block; }
+        .btn { border: none; color: white; background-color: #0d6efd; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1rem;}
+        .btn:hover { background-color: #0b5ed7; }
+        .upload-btn-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
+        
+        #status-box { padding: 10px 20px; border-radius: 6px; font-weight: 500; display: none; }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(600px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        h2 { font-size: 1.2rem; margin-top: 0; color: #1a1a1a; border-bottom: 2px solid #f0f2f5; padding-bottom: 10px; margin-bottom: 15px;}
+        
+        .map { height: 450px; width: 100%; border-radius: 8px; background: #e9ecef; z-index: 1; }
+        .chart-box { height: 250px; position: relative; }
+        
+        .legend { display: flex; gap: 15px; margin-top: 15px; font-size: 0.9em; justify-content: center; }
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .color-box { width: 16px; height: 16px; border-radius: 4px; }
+        
+        .cluster-layout { display: flex; gap: 20px; flex-wrap: wrap; }
+        .cluster-map-container { flex: 2; min-width: 400px; }
+        .cluster-list-container { flex: 1; min-width: 300px; background: #f8f9fa; padding: 15px; border-radius: 8px; height: 450px; overflow-y: auto; box-sizing: border-box;}
+        
+        .cluster-list { list-style: none; padding: 0; margin: 0; }
+        .cluster-list li { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #dee2e6; }
+        .cluster-list li:last-child { border-bottom: none; }
+        .badge { color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.85em; font-weight: bold; }
+        .sub-text { font-size: 0.85em; color: #6c757d; display: block; margin-top: 4px;}
+        .route-marker { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="upload-btn-wrapper">
+        <button class="btn">📂 Importer sent_traces.json</button>
+        <input type="file" id="jsonFileInput" accept=".json">
+    </div>
+    <div id="status-box"></div>
+</div>
+
+<div class="container">
+    <div class="grid">
+        <div class="card">
+            <h2>🔥 Carte de Chaleur & Barycentre Régional</h2>
+            <div id="map-heat" class="map"></div>
+            <span class="sub-text">Le marqueur indique le centre d'équilibre calculé uniquement sur votre région la plus fréquentée (exclut les voyages).</span>
+        </div>
+        <div class="card">
+            <h2>⚡ Carte des Vitesses</h2>
+            <div id="map-speed" class="map"></div>
+            <div class="legend">
+                <div class="legend-item"><div class="color-box" style="background:#dc3545;"></div> &lt; 12 km/h</div>
+                <div class="legend-item"><div class="color-box" style="background:#fd7e14;"></div> 12-20 km/h</div>
+                <div class="legend-item"><div class="color-box" style="background:#20c997;"></div> 20-28 km/h</div>
+                <div class="legend-item"><div class="color-box" style="background:#0dcaf0;"></div> &gt; 28 km/h</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-3">
+        <div class="card"><h2>🕒 Horaires de départ</h2><div class="chart-box"><canvas id="chart-hours"></canvas></div></div>
+        <div class="card"><h2>📅 Répartition Hebdo</h2><div class="chart-box"><canvas id="chart-days"></canvas></div></div>
+        <div class="card"><h2>☀️ Empreinte Journée</h2><div class="chart-box"><canvas id="chart-periods"></canvas></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom: 40px;">
+        <h2>📍 Analyse Spatiale : Cartographie des trajets récurrents</h2>
+        <span class="sub-text" style="margin-bottom: 15px;">Regroupement des trajets partageant les mêmes extrémités (tolérance 800m). Les détours possibles entre les deux points ne sont pas pris en compte pour le clustering.</span>
+        
+        <div class="cluster-layout">
+            <div class="cluster-map-container">
+                <div id="map-clusters" class="map" style="height: 100%;"></div>
+            </div>
+            <div class="cluster-list-container">
+                <ul class="cluster-list" id="clusters-list">
+                    <li><i>En attente des données...</i></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const mapHeat = L.map('map-heat').setView([48.8566, 2.3522], 11);
+    const mapSpeed = L.map('map-speed').setView([48.8566, 2.3522], 11);
+    const mapClusters = L.map('map-clusters').setView([48.8566, 2.3522], 11);
+    
+    const tileLayerUrl = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+    L.tileLayer(tileLayerUrl).addTo(mapHeat);
+    L.tileLayer(tileLayerUrl).addTo(mapSpeed);
+    L.tileLayer(tileLayerUrl).addTo(mapClusters);
+
+    let heatLayerGroup = L.layerGroup().addTo(mapHeat);
+    let speedLayerGroup = L.layerGroup().addTo(mapSpeed);
+    let clusterLayerGroup = L.featureGroup().addTo(mapClusters);
+    let chartInstances = [];
+
+    const fileInput = document.getElementById('jsonFileInput');
+    const statusBox = document.getElementById('status-box');
+
+    fileInput.addEventListener('click', function() { this.value = null; });
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        showStatus("⏳ Analyse géospatiale en cours...", "#fff3cd", "#856404");
+
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            try {
+                const data = JSON.parse(event.target.result);
+                const traces = data.filter(d => d.model === "gvItinerary.usertrace" && d.fields && d.fields.geometry);
+                if (traces.length === 0) throw new Error("Aucun trajet trouvé.");
+
+                processData(traces);
+                
+                showStatus(`✅ Succès ! ${traces.length} trajets analysés.`, "#d1e7dd", "#0f5132");
+                setTimeout(() => { statusBox.style.display = 'none'; }, 4000);
+
+            } catch (err) {
+                showStatus(`❌ Erreur : ${err.message}`, "#f8d7da", "#842029");
+            }
+        };
+        reader.readAsText(file);
+    });
+
+    function showStatus(text, bg, color) {
+        statusBox.style.display = 'block'; statusBox.style.backgroundColor = bg; statusBox.style.color = color; statusBox.innerText = text;
+    }
+
+    function processData(traces) {
+        heatLayerGroup.clearLayers();
+        speedLayerGroup.clearLayers();
+
+        const heatPoints = [];
+        const speedSegments = { '#dc3545': [], '#fd7e14': [], '#20c997': [], '#0dcaf0': [] };
+        const hours = new Array(24).fill(0), days = new Array(7).fill(0), periods = { matin: 0, aprem: 0, soir: 0 };
+        const routesForClustring = [];
+
+        // Structure pour isoler la région la plus dense (Barycentre intelligent)
+        const densityGrid = {};
+
+        traces.forEach(trace => {
+            if (trace.fields.created) {
+                const dt = new Date(String(trace.fields.created).replace('Z', '+00:00'));
+                if (!isNaN(dt)) {
+                    const h = dt.getHours();
+                    hours[h]++; days[dt.getDay()]++;
+                    if (h >= 5 && h < 12) periods.matin++; else if (h >= 12 && h < 18) periods.aprem++; else periods.soir++;
+                }
+            }
+
+            const match = String(trace.fields.geometry).match(/LINESTRING\s*\(([^)]+)\)/);
+            if (!match) return;
+
+            const coordsRaw = match[1].split(',');
+            const currentRouteCoords = [];
+
+            coordsRaw.forEach(p => {
+                const parts = p.trim().split(/\s+/);
+                if (parts.length >= 2) {
+                    const lon = parseFloat(parts[0]), lat = parseFloat(parts[1]);
+                    if (!isNaN(lat) && !isNaN(lon)) {
+                        currentRouteCoords.push([lat, lon]);
+                        heatPoints.push([lat, lon, 0.03]);
+
+                        // Classement dans la grille de densité (carrés de ~50km)
+                        const gridKey = Math.floor(lat * 2) + '_' + Math.floor(lon * 2);
+                        if(!densityGrid[gridKey]) densityGrid[gridKey] = { count: 0, sumLat: 0, sumLon: 0 };
+                        densityGrid[gridKey].count++;
+                        densityGrid[gridKey].sumLat += lat;
+                        densityGrid[gridKey].sumLon += lon;
+                    }
+                }
+            });
+
+            if (currentRouteCoords.length > 5) {
+                routesForClustring.push({
+                    start: currentRouteCoords[0],
+                    end: currentRouteCoords[currentRouteCoords.length - 1],
+                    path: currentRouteCoords // On sauvegarde le tracé pour le dessiner plus tard
+                });
+            }
+
+            let speedsArray = [];
+            try { if (trace.fields.speeds) speedsArray = JSON.parse(trace.fields.speeds); } catch(e){}
+
+            for (let i = 0; i < currentRouteCoords.length - 1; i++) {
+                let speed = speedsArray[i] || 15;
+                let color = speed > 28 ? '#0dcaf0' : speed > 20 ? '#20c997' : speed > 12 ? '#fd7e14' : '#dc3545';
+                speedSegments[color].push([currentRouteCoords[i], currentRouteCoords[i+1]]);
+            }
+        });
+
+        // 1. CARTE CHALEUR & BARYCENTRE INTELLIGENT
+        if (heatPoints.length > 0) {
+            L.heatLayer(heatPoints, { radius: 8, blur: 10, maxZoom: 14 }).addTo(heatLayerGroup);
+            
+            // Recherche de la zone la plus dense
+            let maxDenseKey = null; let maxDenseCount = 0;
+            for(let k in densityGrid) {
+                if(densityGrid[k].count > maxDenseCount) { maxDenseCount = densityGrid[k].count; maxDenseKey = k; }
+            }
+            
+            if(maxDenseKey) {
+                const bLat = densityGrid[maxDenseKey].sumLat / densityGrid[maxDenseKey].count;
+                const bLon = densityGrid[maxDenseKey].sumLon / densityGrid[maxDenseKey].count;
+                L.marker([bLat, bLon]).addTo(heatLayerGroup).bindPopup(`<b>Barycentre Régional</b><br>Calculé sur la zone concentrant le plus de points.<br>Lat: ${bLat.toFixed(4)} | Lon: ${bLon.toFixed(4)}`).openPopup();
+                mapHeat.setView([bLat, bLon], 10);
+            }
+        }
+
+        // 2. CARTE DES VITESSES
+        for (const [color, segments] of Object.entries(speedSegments)) {
+            if (segments.length > 0) L.polyline(segments, { color: color, weight: 3, opacity: 0.8 }).addTo(speedLayerGroup);
+        }
+        if (heatPoints.length > 0) mapSpeed.fitBounds(L.polyline(heatPoints.map(p => [p[0], p[1]])).getBounds());
+
+        drawCharts(hours, days, periods);
+        runClustering(routesForClustring);
+
+        setTimeout(() => { mapHeat.invalidateSize(); mapSpeed.invalidateSize(); mapClusters.invalidateSize(); }, 300);
+    }
+
+    function getDist(c1, c2) {
+        const R = 6371, dLat = (c2[0] - c1[0]) * Math.PI / 180, dLon = (c2[1] - c1[1]) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(c1[0]*Math.PI/180) * Math.cos(c2[0]*Math.PI/180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function runClustering(routes) {
+        clusterLayerGroup.clearLayers();
+        let clusters = [];
+
+        routes.forEach(r => {
+            let found = false;
+            for (let c of clusters) {
+                if ((getDist(r.start, c.start) < 0.8 && getDist(r.end, c.end) < 0.8) || (getDist(r.start, c.end) < 0.8 && getDist(r.end, c.start) < 0.8)) {
+                    c.count++; found = true; break;
+                }
+            }
+            if (!found) clusters.push({ start: r.start, end: r.end, count: 1, path: r.path });
+        });
+
+        clusters.sort((a, b) => b.count - a.count);
+        const ul = document.getElementById('clusters-list'); ul.innerHTML = '';
+        const top = clusters.slice(0, 8); // On affiche jusqu'à 8 routes récurrentes
+        
+        if(top.length === 0) { ul.innerHTML = "<li>Aucun trajet détecté.</li>"; return; }
+
+        // Palette de couleurs distinctes pour bien différencier les routes sur la carte
+        const palette = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c'];
+
+        top.forEach((c, i) => {
+            let color = palette[i % palette.length];
+            let distVolOiseau = getDist(c.start, c.end).toFixed(1);
+            
+            // Ajout du tracé sur la carte
+            L.polyline(c.path, { color: color, weight: 5, opacity: 0.9 }).addTo(clusterLayerGroup)
+             .bindPopup(`<b>Route récurrente #${i+1}</b><br>${c.count} trajets identifiés`);
+
+            // Ajout dans la liste légende
+            ul.innerHTML += `<li>
+                <div>
+                    <span class="route-marker" style="background-color: ${color};"></span>
+                    <strong>Route #${i+1}</strong> 
+                    <span class="sub-text">Distance vol d'oiseau : ${distVolOiseau} km</span>
+                </div>
+                <span class="badge" style="background-color: ${color};">${c.count} trajets</span>
+            </li>`;
+        });
+
+        // Cadrage automatique de la carte sur les tracés trouvés
+        if(top.length > 0) mapClusters.fitBounds(clusterLayerGroup.getBounds(), { padding: [20, 20] });
+    }
+
+    function drawCharts(hours, days, periods) {
+        chartInstances.forEach(c => c.destroy()); chartInstances = [];
+
+        chartInstances.push(new Chart(document.getElementById('chart-hours'), {
+            type: 'bar',
+            data: { labels: Array.from({length:24}, (_,i) => i+"h"), datasets: [{ data: hours, backgroundColor: '#0d6efd', borderRadius: 4 }] },
+            options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        }));
+
+        chartInstances.push(new Chart(document.getElementById('chart-days'), {
+            type: 'radar',
+            data: { labels: ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'], datasets: [{ label: 'Fréquence', data: days, backgroundColor: 'rgba(32, 201, 151, 0.4)', borderColor: '#20c997', pointBackgroundColor: '#198754' }] },
+            options: { maintainAspectRatio: false }
+        }));
+
+        chartInstances.push(new Chart(document.getElementById('chart-periods'), {
+            type: 'doughnut',
+            data: { labels: ['Matin', 'Après-midi', 'Soir / Nuit'], datasets: [{ data: [periods.matin, periods.aprem, periods.soir], backgroundColor: ['#ffc107', '#fd7e14', '#343a40'] }] },
+            options: { maintainAspectRatio: false }
+        }));
+    }
+</script>
+
+</body>
+</html>
