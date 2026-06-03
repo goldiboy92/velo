@@ -11,15 +11,11 @@
 
     <style>
         body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f0f2f5; margin: 0; padding: 0; color: #333; }
-        .header { background: #fff; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; gap: 20px;}
+        .header { background: #fff; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; justify-content: space-between; gap: 20px;}
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         
-        .upload-btn-wrapper { position: relative; overflow: hidden; display: inline-block; }
-        .btn { border: none; color: white; background-color: #0d6efd; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1rem;}
-        .btn:hover { background-color: #0b5ed7; }
-        .upload-btn-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
-        
-        #status-box { padding: 10px 20px; border-radius: 6px; font-weight: 500; display: none; }
+        h1 { margin: 0; font-size: 1.5rem; color: #0d6efd; }
+        #status-box { padding: 10px 20px; border-radius: 6px; font-weight: 500; display: none; flex-grow: 1; text-align: center;}
         
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(600px, 1fr)); gap: 20px; margin-bottom: 20px; }
         .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 20px; }
@@ -49,10 +45,7 @@
 <body>
 
 <div class="header">
-    <div class="upload-btn-wrapper">
-        <button class="btn">📂 Importer sent_traces.json</button>
-        <input type="file" id="jsonFileInput" accept=".json">
-    </div>
+    <h1>🚴‍♂️ Mes Déplacements à Vélo</h1>
     <div id="status-box"></div>
 </div>
 
@@ -61,7 +54,7 @@
         <div class="card">
             <h2>🔥 Carte de Chaleur & Barycentre Régional</h2>
             <div id="map-heat" class="map"></div>
-            <span class="sub-text">Le marqueur indique le centre d'équilibre calculé uniquement sur votre région la plus fréquentée (exclut les voyages).</span>
+            <span class="sub-text">Le marqueur indique le centre d'équilibre calculé uniquement sur la région la plus fréquentée (exclut les voyages).</span>
         </div>
         <div class="card">
             <h2>⚡ Carte des Vitesses</h2>
@@ -112,39 +105,37 @@
     let speedLayerGroup = L.layerGroup().addTo(mapSpeed);
     let clusterLayerGroup = L.featureGroup().addTo(mapClusters);
     let chartInstances = [];
-
-    const fileInput = document.getElementById('jsonFileInput');
     const statusBox = document.getElementById('status-box');
 
-    fileInput.addEventListener('click', function() { this.value = null; });
-    fileInput.addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
+    function showStatus(text, bg, color) {
+        statusBox.style.display = 'block'; statusBox.style.backgroundColor = bg; statusBox.style.color = color; statusBox.innerText = text;
+    }
 
-        showStatus("⏳ Analyse géospatiale en cours...", "#fff3cd", "#856404");
+    // CHARGEMENT AUTOMATIQUE AU LANCEMENT DE LA PAGE
+    document.addEventListener('DOMContentLoaded', () => {
+        showStatus("⏳ Chargement automatique des données...", "#fff3cd", "#856404");
 
-        const reader = new FileReader();
-        reader.onload = function(event) {
-            try {
-                const data = JSON.parse(event.target.result);
+        fetch('sent_traces.json')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("Impossible de trouver sent_traces.json. Vérifiez qu'il est bien sur GitHub dans le même dossier.");
+                }
+                return response.json();
+            })
+            .then(data => {
                 const traces = data.filter(d => d.model === "gvItinerary.usertrace" && d.fields && d.fields.geometry);
-                if (traces.length === 0) throw new Error("Aucun trajet trouvé.");
+                if (traces.length === 0) throw new Error("Aucun trajet trouvé dans le fichier.");
 
                 processData(traces);
                 
                 showStatus(`✅ Succès ! ${traces.length} trajets analysés.`, "#d1e7dd", "#0f5132");
                 setTimeout(() => { statusBox.style.display = 'none'; }, 4000);
-
-            } catch (err) {
+            })
+            .catch(err => {
                 showStatus(`❌ Erreur : ${err.message}`, "#f8d7da", "#842029");
-            }
-        };
-        reader.readAsText(file);
+                console.error(err);
+            });
     });
-
-    function showStatus(text, bg, color) {
-        statusBox.style.display = 'block'; statusBox.style.backgroundColor = bg; statusBox.style.color = color; statusBox.innerText = text;
-    }
 
     function processData(traces) {
         heatLayerGroup.clearLayers();
@@ -154,8 +145,6 @@
         const speedSegments = { '#dc3545': [], '#fd7e14': [], '#20c997': [], '#0dcaf0': [] };
         const hours = new Array(24).fill(0), days = new Array(7).fill(0), periods = { matin: 0, aprem: 0, soir: 0 };
         const routesForClustring = [];
-
-        // Structure pour isoler la région la plus dense (Barycentre intelligent)
         const densityGrid = {};
 
         traces.forEach(trace => {
@@ -182,7 +171,6 @@
                         currentRouteCoords.push([lat, lon]);
                         heatPoints.push([lat, lon, 0.03]);
 
-                        // Classement dans la grille de densité (carrés de ~50km)
                         const gridKey = Math.floor(lat * 2) + '_' + Math.floor(lon * 2);
                         if(!densityGrid[gridKey]) densityGrid[gridKey] = { count: 0, sumLat: 0, sumLon: 0 };
                         densityGrid[gridKey].count++;
@@ -196,7 +184,7 @@
                 routesForClustring.push({
                     start: currentRouteCoords[0],
                     end: currentRouteCoords[currentRouteCoords.length - 1],
-                    path: currentRouteCoords // On sauvegarde le tracé pour le dessiner plus tard
+                    path: currentRouteCoords
                 });
             }
 
@@ -210,20 +198,17 @@
             }
         });
 
-        // 1. CARTE CHALEUR & BARYCENTRE INTELLIGENT
+        // 1. CARTE CHALEUR
         if (heatPoints.length > 0) {
             L.heatLayer(heatPoints, { radius: 8, blur: 10, maxZoom: 14 }).addTo(heatLayerGroup);
-            
-            // Recherche de la zone la plus dense
             let maxDenseKey = null; let maxDenseCount = 0;
             for(let k in densityGrid) {
                 if(densityGrid[k].count > maxDenseCount) { maxDenseCount = densityGrid[k].count; maxDenseKey = k; }
             }
-            
             if(maxDenseKey) {
                 const bLat = densityGrid[maxDenseKey].sumLat / densityGrid[maxDenseKey].count;
                 const bLon = densityGrid[maxDenseKey].sumLon / densityGrid[maxDenseKey].count;
-                L.marker([bLat, bLon]).addTo(heatLayerGroup).bindPopup(`<b>Barycentre Régional</b><br>Calculé sur la zone concentrant le plus de points.<br>Lat: ${bLat.toFixed(4)} | Lon: ${bLon.toFixed(4)}`).openPopup();
+                L.marker([bLat, bLon]).addTo(heatLayerGroup).bindPopup(`<b>Barycentre Régional</b><br>Lat: ${bLat.toFixed(4)} | Lon: ${bLon.toFixed(4)}`).openPopup();
                 mapHeat.setView([bLat, bLon], 10);
             }
         }
@@ -262,22 +247,19 @@
 
         clusters.sort((a, b) => b.count - a.count);
         const ul = document.getElementById('clusters-list'); ul.innerHTML = '';
-        const top = clusters.slice(0, 8); // On affiche jusqu'à 8 routes récurrentes
+        const top = clusters.slice(0, 8); 
         
         if(top.length === 0) { ul.innerHTML = "<li>Aucun trajet détecté.</li>"; return; }
 
-        // Palette de couleurs distinctes pour bien différencier les routes sur la carte
         const palette = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c'];
 
         top.forEach((c, i) => {
             let color = palette[i % palette.length];
             let distVolOiseau = getDist(c.start, c.end).toFixed(1);
             
-            // Ajout du tracé sur la carte
             L.polyline(c.path, { color: color, weight: 5, opacity: 0.9 }).addTo(clusterLayerGroup)
              .bindPopup(`<b>Route récurrente #${i+1}</b><br>${c.count} trajets identifiés`);
 
-            // Ajout dans la liste légende
             ul.innerHTML += `<li>
                 <div>
                     <span class="route-marker" style="background-color: ${color};"></span>
@@ -288,7 +270,6 @@
             </li>`;
         });
 
-        // Cadrage automatique de la carte sur les tracés trouvés
         if(top.length > 0) mapClusters.fitBounds(clusterLayerGroup.getBounds(), { padding: [20, 20] });
     }
 
